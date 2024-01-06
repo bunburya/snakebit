@@ -28,11 +28,11 @@ fn main() -> ! {
 
     init_buttons(board.GPIOTE, board.buttons);
 
-    //let mut display = Display::new(board.display_pins);
-    let mut display = microbit::display::nonblocking::Display::new(
-        board.TIMER1,
-        board.display_pins
-    );
+    let mut display = Display::new(board.display_pins);
+    //let mut display = microbit::display::nonblocking::Display::new(
+    //    board.TIMER1,
+    //    board.display_pins
+    //);
 
     loop {
         loop {  // Game loop
