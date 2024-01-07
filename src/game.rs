@@ -1,12 +1,13 @@
+use core::cmp::{max, min};
 use heapless::FnvIndexSet;
 use heapless::spsc::Queue;
 use microbit::hal::Rng;
 use crate::control::Turn;
 
 /// Number of rows in our grid (ie, our LED matrix)
-const N_ROWS: u8 = 5;
+const N_ROWS: usize = 5;
 /// Number of columns in our grid
-const N_COLS: u8 = 5;
+const N_COLS: usize = 5;
 
 type CoordSet = FnvIndexSet<Coords, 32>;
 
@@ -24,8 +25,6 @@ pub enum GameStatus {
     Lost,
     Ongoing
 }
-
-
 
 /// The outcome of a single move/step.
 enum StepOutcome {
@@ -58,13 +57,13 @@ impl Coords {
         exclude: Option<&CoordSet>
     ) -> Self {
         let mut coords = Coords {
-            row: (rng.random_u8() % N_ROWS) as i8,
-            col: (rng.random_u8() % N_COLS) as i8
+            row: ((rng.random_u8() as usize) % N_ROWS) as i8,
+            col: ((rng.random_u8() as usize) % N_COLS) as i8
         };
         while exclude.is_some_and(|exc| exc.contains(&coords)) {
             coords = Coords {
-                row: (rng.random_u8() % N_ROWS) as i8,
-                col: (rng.random_u8() % N_COLS) as i8
+                row: ((rng.random_u8() as usize) % N_ROWS) as i8,
+                col: ((rng.random_u8() as usize) % N_COLS) as i8
             }
         }
         coords
@@ -153,7 +152,8 @@ pub(crate) struct Game {
     snake: Snake,
     food_coords: Coords,
     speed: u8,
-    pub(crate) status: GameStatus
+    pub(crate) status: GameStatus,
+    score: u8
 }
 
 impl Game {
@@ -168,7 +168,8 @@ impl Game {
             snake,
             food_coords,
             speed: 1,
-            status: GameStatus::Ongoing
+            status: GameStatus::Ongoing,
+            score: 0
         }
     }
 
@@ -178,6 +179,14 @@ impl Game {
         self.place_food();
         self.speed = 1;
         self.status = GameStatus::Ongoing;
+        self.score = 0;
+    }
+
+    /// Randomly place food on the grid.
+    fn place_food(&mut self) -> Coords {
+        let coords = Coords::random(&mut self.rng, Some(&self.snake.coord_set));
+        self.food_coords = coords;
+        coords
     }
 
     /// Assess the snake's next move and return the outcome. Doesn't actually update the game state.
@@ -211,13 +220,6 @@ impl Game {
         }
     }
 
-    /// Randomly place food on the grid.
-    fn place_food(&mut self) -> Coords {
-        let coords = Coords::random(&mut self.rng, Some(&self.snake.coord_set));
-        self.food_coords = coords;
-        coords
-    }
-
     /// Handle the outcome of a step, updating the game's internal state.
     fn handle_step_outcome(&mut self, outcome: StepOutcome) {
         self.status = match outcome {
@@ -227,6 +229,10 @@ impl Game {
             StepOutcome::Eat(c) => {
                 self.snake.move_snake(c, true);
                 self.place_food();
+                self.score += 1;
+                if self.score % 5 == 0 {
+                    self.speed += 1
+                }
                 GameStatus::Ongoing
             },
             StepOutcome::Move(c) => {
@@ -236,26 +242,50 @@ impl Game {
         }
     }
 
+
     pub(crate) fn step(&mut self, turn: Turn) {
         self.snake.turn(turn);
         let outcome = self.get_step_outcome();
         self.handle_step_outcome(outcome);
     }
 
+    /// Calculate the length of time to wait between game steps, in milliseconds. Generally this
+    /// will get lower as the player's score increases, but need to be careful it cannot result in a
+    /// value below zero.
+    pub(crate) fn step_len_ms(&self) -> u32 {
+        let result = 1000 - (200 * ((self.speed as i32) - 1));
+        max(result, 200) as u32
+    }
+
     /// Return an array representing the game state, which can be used to display the state on the
     /// microbit's LED matrix.
-    pub(crate) fn display(
+    pub(crate) fn game_matrix(
         &self,
         head_brightness: u8,
         tail_brightness: u8,
         food_brightness: u8
-    ) -> [[u8; N_COLS as usize]; N_ROWS as usize] {
-        let mut values = [[0u8; N_COLS as usize]; N_ROWS as usize];
+    ) -> [[u8; N_COLS]; N_ROWS] {
+        let mut values = [[0u8; N_COLS]; N_ROWS];
         values[self.snake.head.row as usize][self.snake.head.col as usize] = head_brightness;
         for t in &self.snake.tail {
             values[t.row as usize][t.col as usize] = tail_brightness
         }
         values[self.food_coords.row as usize][self.food_coords.col as usize] = food_brightness;
+        values
+    }
+
+    /// Return an array representing the game score, which can be used to display the score on the
+    /// microbit's LED matrix (by illuminating the equivalent number of LEDs, going left->right and
+    /// top->bottom).
+    pub(crate) fn score_matrix(&self, brightness: u8) -> [[u8; N_COLS]; N_ROWS] {
+        let mut values = [[0u8; N_COLS]; N_ROWS];
+        let full_rows = (self.score as usize) / N_COLS;
+        for r in 0..full_rows {
+            values[r] = [brightness; N_COLS];
+        }
+        for c in 0..(self.score as usize) % N_COLS {
+            values[full_rows][c] = brightness;
+        }
         values
     }
 }
