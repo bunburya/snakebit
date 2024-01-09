@@ -1,4 +1,4 @@
-use core::cmp::{max, min};
+use core::cmp::max;
 use heapless::FnvIndexSet;
 use heapless::spsc::Queue;
 use microbit::hal::Rng;
@@ -277,14 +277,14 @@ impl Game {
     /// Return an array representing the game score, which can be used to display the score on the
     /// microbit's LED matrix (by illuminating the equivalent number of LEDs, going left->right and
     /// top->bottom).
-    pub(crate) fn score_matrix(&self, brightness: u8) -> [[u8; N_COLS]; N_ROWS] {
+    pub(crate) fn score_matrix(&self) -> [[u8; N_COLS]; N_ROWS] {
         let mut values = [[0u8; N_COLS]; N_ROWS];
         let full_rows = (self.score as usize) / N_COLS;
         for r in 0..full_rows {
-            values[r] = [brightness; N_COLS];
+            values[r] = [1; N_COLS];
         }
         for c in 0..(self.score as usize) % N_COLS {
-            values[full_rows][c] = brightness;
+            values[full_rows][c] = 1;
         }
         values
     }

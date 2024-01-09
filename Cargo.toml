@@ -15,4 +15,5 @@ lsm303agr = "0.3.0"
 nb = "1.1.0"
 libm = "0.2.8"
 heapless = "0.8.0"
+tiny-led-matrix = "1.0.2"
 

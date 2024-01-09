@@ -4,17 +4,17 @@
 mod game;
 mod control;
 mod display;
-mod sound;
 
 use cortex_m_rt::entry;
 use microbit::Board;
 use rtt_target::rtt_init_print;
 use microbit::hal::{Rng, Timer};
-use microbit::display::blocking::Display;
+use microbit::display::nonblocking::{BitImage, GreyscaleImage};
 use microbit::hal::prelude::*;
 use panic_rtt_target as _;
 
 use crate::control::{get_turn, init_buttons};
+use crate::display::{clear_display, display_image, init_display};
 use crate::game::{Game, GameStatus};
 
 
@@ -22,28 +22,31 @@ use crate::game::{Game, GameStatus};
 fn main() -> ! {
     rtt_init_print!();
     let mut board = Board::take().unwrap();
-    let mut timer = Timer::new(board.TIMER0);
+    let mut timer = Timer::new(board.TIMER0).into_periodic();
     let rng = Rng::new(board.RNG);
     let mut game = Game::new(rng);
 
     init_buttons(board.GPIOTE, board.buttons);
+    init_display(board.TIMER1, board.display_pins);
 
-    let mut display = Display::new(board.display_pins);
 
     loop {
         loop {  // Game loop
-            let image = game.game_matrix(8, 4, 2);
-            display.show(&mut timer, image, game.step_len_ms());
+            let image = GreyscaleImage::new(&game.game_matrix(7, 5, 9));
+            display_image(&image);
+            timer.delay_ms(game.step_len_ms());
             match game.status {
                 GameStatus::Ongoing => game.step(get_turn(true)),
                 _ => {
                     for _ in 0..3 {
-                        display.clear();
+                        clear_display();
                         timer.delay_ms(200u32);
-                        display.show(&mut timer, image, 200);
+                        display_image(&image);
+                        timer.delay_ms(200u32);
                     }
-                    display.clear();
-                    display.show(&mut timer, game.score_matrix(9), 1000);
+                    clear_display();
+                    display_image(&BitImage::new(&game.score_matrix()));
+                    timer.delay_ms(1000u32);
                     break
                 }
             }
