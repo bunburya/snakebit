@@ -5,13 +5,7 @@ use cortex_m::interrupt::{free, Mutex};
 use microbit::board::Buttons;
 use microbit::hal::gpiote::Gpiote;
 use microbit::pac::{self, GPIOTE, interrupt};
-
-#[derive(Debug, Copy, Clone)]
-pub enum Turn {
-    Left,
-    Right,
-    None
-}
+use crate::game::Turn;
 
 static GPIO: Mutex<RefCell<Option<Gpiote>>> = Mutex::new(RefCell::new(None));
 static TURN: Mutex<RefCell<Turn>> = Mutex::new(RefCell::new(Turn::None));
@@ -69,11 +63,9 @@ fn GPIOTE() {
                 (true, true) => Turn::None,
             };
 
-            /* Clear events */
+            // Clear events
             gpiote.channel0().reset_events();
             gpiote.channel1().reset_events();
-
-            //rprintln!("Turn: {:?}", turn)
 
             *TURN.borrow(cs).borrow_mut() = turn;
         }

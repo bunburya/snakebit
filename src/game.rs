@@ -1,8 +1,6 @@
 use core::cmp::max;
 use heapless::FnvIndexSet;
 use heapless::spsc::Queue;
-use microbit::hal::Rng;
-use crate::control::Turn;
 
 /// Number of rows in our grid (ie, our LED matrix)
 const N_ROWS: usize = 5;
@@ -19,6 +17,13 @@ enum Direction {
     Right
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum Turn {
+    Left,
+    Right,
+    None
+}
+
 
 pub enum GameStatus {
     Won,
@@ -32,12 +37,35 @@ enum StepOutcome {
     Full(Coords),
     /// Snake has collided with itself (player loses)
     Collision(Coords),
-    /// Snake has left the edge of the grid (player loses)
-    OutOfBounds(Coords),
     /// Snake has eaten some food
     Eat(Coords),
     /// Snake has moved (and nothing else has happened)
     Move(Coords)
+}
+
+/// A basic pseudo-random number generator.
+struct Prng {
+    value: u32
+}
+
+impl Prng {
+    fn new(seed: u32) -> Self {
+        Self {value: seed}
+    }
+
+    /// Basic xorshift PRNG function: see https://en.wikipedia.org/wiki/Xorshift
+    fn xorshift32(mut input: u32) -> u32 {
+        input ^= input << 13;
+        input ^= input >> 17;
+        input ^= input << 5;
+        input
+    }
+
+    /// Return a pseudo-random u32.
+    fn random_u32(&mut self) -> u32 {
+        self.value = Self::xorshift32(self.value);
+        self.value
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -53,17 +81,17 @@ impl Coords {
     /// Get random coordinates within a grid. `exclude` is an optional set of coordinates which
     /// should be excluded from the output.
     fn random(
-        rng: &mut Rng,
+        rng: &mut Prng,
         exclude: Option<&CoordSet>
     ) -> Self {
         let mut coords = Coords {
-            row: ((rng.random_u8() as usize) % N_ROWS) as i8,
-            col: ((rng.random_u8() as usize) % N_COLS) as i8
+            row: ((rng.random_u32() as usize) % N_ROWS) as i8,
+            col: ((rng.random_u32() as usize) % N_COLS) as i8
         };
         while exclude.is_some_and(|exc| exc.contains(&coords)) {
             coords = Coords {
-                row: ((rng.random_u8() as usize) % N_ROWS) as i8,
-                col: ((rng.random_u8() as usize) % N_COLS) as i8
+                row: ((rng.random_u32() as usize) % N_ROWS) as i8,
+                col: ((rng.random_u32() as usize) % N_COLS) as i8
             }
         }
         coords
@@ -95,7 +123,7 @@ impl Snake {
         let mut coord_set: CoordSet = FnvIndexSet::new();
         coord_set.insert(head).unwrap();
         coord_set.insert(initial_tail).unwrap();
-        Snake {
+        Self {
             head,
             tail,
             coord_set,
@@ -110,9 +138,7 @@ impl Snake {
         self.tail.enqueue(self.head).unwrap();
         // Head moves to new coords
         self.head = coords;
-
         self.coord_set.insert(coords).unwrap();
-
         if !extend {
             let back = self.tail.dequeue().unwrap();
             self.coord_set.remove(&back);
@@ -148,7 +174,7 @@ impl Snake {
 
 /// Struct to hold game state and associated behaviour
 pub(crate) struct Game {
-    rng: Rng,
+    rng: Prng,
     snake: Snake,
     food_coords: Coords,
     speed: u8,
@@ -158,12 +184,13 @@ pub(crate) struct Game {
 
 impl Game {
 
-    pub(crate) fn new(mut rng: Rng) -> Self {
+    pub(crate) fn new(rng_seed: u32) -> Self {
+        let mut rng = Prng::new(rng_seed);
         let mut tail: CoordSet = FnvIndexSet::new();
         tail.insert(Coords { row: 2, col: 1 }).unwrap();
         let snake = Snake::new();
         let food_coords = Coords::random(&mut rng, Some(&snake.coord_set));
-        Game {
+        Self {
             rng,
             snake,
             food_coords,
@@ -189,8 +216,23 @@ impl Game {
         coords
     }
 
-    /// Assess the snake's next move and return the outcome. Doesn't actually update the game state.
-    fn get_step_outcome(&self) -> StepOutcome {
+    /// "Wrap around" out of bounds coordinates (eg, coordinates that are off to the left of the
+    /// grid will appear in the rightmost column). Assumes that coordinates are out of bounds in one
+    /// dimension only.
+    fn wraparound(&self, coords: Coords) -> Coords {
+        if coords.row < 0 {
+            Coords { row: (N_ROWS - 1) as i8, ..coords }
+        } else if coords.row >= (N_ROWS as i8) {
+            Coords { row: 0, ..coords }
+        } else if coords.col < 0 {
+            Coords { col: (N_COLS - 1) as i8, ..coords }
+        } else {
+            Coords { col: 0, ..coords }
+        }
+    }
+
+    /// Determine the next tile that the snake will move on to (without actually moving the snake).
+    fn get_next_move(&self) -> Coords {
         let head = &self.snake.head;
         let next_move = match self.snake.direction {
             Direction::Up => Coords { row: head.row - 1, col: head.col },
@@ -199,8 +241,16 @@ impl Game {
             Direction::Right => Coords { row: head.row, col: head.col + 1 },
         };
         if next_move.is_out_of_bounds() {
-            StepOutcome::OutOfBounds(next_move)
-        } else if self.snake.coord_set.contains(&next_move) {
+            self.wraparound(next_move)
+        } else {
+            next_move
+        }
+    }
+
+    /// Assess the snake's next move and return the outcome. Doesn't actually update the game state.
+    fn get_step_outcome(&self) -> StepOutcome {
+        let next_move = self.get_next_move();
+        if self.snake.coord_set.contains(&next_move) {
             // We haven't moved the snake yet, so if the next move is at the end of the tail, there
             // won't actually be any collision (as the tail will have moved by the time the head
             // moves onto the tile)
@@ -223,7 +273,6 @@ impl Game {
     /// Handle the outcome of a step, updating the game's internal state.
     fn handle_step_outcome(&mut self, outcome: StepOutcome) {
         self.status = match outcome {
-            StepOutcome::OutOfBounds(_) => GameStatus::Lost,
             StepOutcome::Collision(_) => GameStatus::Lost,
             StepOutcome::Full(_) => GameStatus::Won,
             StepOutcome::Eat(c) => {
@@ -242,7 +291,6 @@ impl Game {
         }
     }
 
-
     pub(crate) fn step(&mut self, turn: Turn) {
         self.snake.turn(turn);
         let outcome = self.get_step_outcome();
@@ -258,7 +306,7 @@ impl Game {
     }
 
     /// Return an array representing the game state, which can be used to display the state on the
-    /// microbit's LED matrix.
+    /// microbit's LED matrix. Each `_brightness` parameter should be a value between 0 and 9.
     pub(crate) fn game_matrix(
         &self,
         head_brightness: u8,
